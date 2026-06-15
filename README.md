@@ -1728,359 +1728,2001 @@ datos.AsParallel()
 
 ---
 
-## 13. Arquitectura de 4 Capas con LINQ
+## 13. Arquitectura de 4 Capas con LINQ — Guia Completa
 
-La arquitectura de 4 capas separa responsabilidades y centraliza el uso de LINQ en la capa de **Repositorio** y **Servicio**. Cada capa utiliza LINQ de manera diferente y para propositos distintos.
+La arquitectura de 4 capas es un patron de diseno arquitectonico que separa las responsabilidades de una aplicacion en cuatro niveles bien definidos, cada uno con una funcion especifica y limites claros. Este patron es fundamental para construir aplicaciones empresariales robustas, escalables y faciles de mantener. En el contexto de LINQ con C# y SQL Server, cada capa utiliza LINQ de manera diferente: desde las consultas directas en la Capa de Acceso a Datos, pasando por las transformaciones y validaciones en la Capa de Logica de Negocio, hasta el formateo de datos en la Capa de Presentacion.
 
-```
-+-------------------------------------------+
-|       CAPA DE PRESENTACION               |  <- Razor / Blazor / MVC / API
-|       (Controllers / Pages)              |     Solo llama servicios
-+-------------------+-----------------------+
-                    |
-+-------------------v-----------------------+
-|       CAPA DE SERVICIO (BLL)             |  <- Logica de negocio
-|       (Business Logic)                   |     Usa repositorios, aplica reglas
-+-------------------+-----------------------+     LINQ: GroupBy, Aggregate, Where
-                    |
-+-------------------v-----------------------+
-|       CAPA DE REPOSITORIO (DAL)          |  <- LINQ vive aqui
-|       (Data Access / Repository)         |     Consultas a la base de datos
-+-------------------+-----------------------+     LINQ: Query Syntax, Include, Where
-                    |
-+-------------------v-----------------------+
-|       CAPA DE DATOS                      |  <- Entity Framework Core
-|       (DbContext / Models)               |     Modelos y configuracion EF
-+-------------------------------------------+
-                    |
-            +-------v-------+
-            |   SQL Server   |
-            +---------------+
-```
+### 13.1 Filosofia de la Arquitectura de 4 Capas
 
-### Estructura de la Solucion
+La separacion en capas se basa en el principio de **responsabilidad unica** (SRP): cada capa tiene una y solo una razon para cambiar. Si la logica de negocio cambia, solo se modifica la BLL. Si la base de datos cambia de SQL Server a PostgreSQL, solo se modifica la DAL. Si la interfaz cambia de consola a web, solo se modifica la presentacion. Esta separacion permite que cada capa sea desarrollada, probada y mantenida de forma independiente por equipos diferentes.
+
+**Regla de oro:** Las dependencias siempre van de arriba hacia abajo. La Presentacion depende de la BLL, la BLL depende de la DAL, y la DAL depende de las Entidades. Nunca al reves.
 
 ```
-TiendaLinq.sln
-+-- src/
-|   +-- Tienda.Api/                  <- Proyecto ASP.NET Core
-|   |   +-- Controllers/
-|   |   |   +-- ProductosController.cs
-|   |   |   +-- VentasController.cs
-|   |   +-- Program.cs
-|   +-- Tienda.Core/                 <- Logica de negocio
-|   |   +-- Models/
-|   |   +-- DTOs/
-|   |   +-- Interfaces/
-|   |   +-- Services/
-|   +-- Tienda.Data/                 <- Acceso a datos
-|       +-- Context/
-|       +-- Repositories/
-|       +-- Migrations/
-+-- tests/
-|   +-- Tienda.Tests.Unit/
-|   +-- Tienda.Tests.Integration/
-+-- .github/
-|   +-- workflows/
-|       +-- ci.yml
-+-- .gitignore
-+-- README.md
++=========================================================+
+|               CAPA DE PRESENTACION (UI)                 |
+|   Console / WinForms / WPF / Blazor / ASP.NET MVC/API  |
+|   - Muestra datos al usuario                            |
+|   - Captura entradas del usuario                        |
+|   - LINQ: formateo, paginacion, resumenes visuales      |
+|   - NUNCA accede directamente a la BD                   |
++=========================+===============================+
+                          |
+                          v
++=========================+===============================+
+|           CAPA DE LOGICA DE NEGOCIO (BLL)               |
+|           Business Logic Layer                          |
+|   - Contiene las REGLAS DE NEGOCIO                     |
+|   - Validaciones de datos                              |
+|   - Calculos y transformaciones                        |
+|   - LINQ: GroupBy, Aggregate, Where, Any, All, Select  |
+|   - Transforma Entidades a DTOs                        |
+|   - Orquesta operaciones entre repositorios            |
+|   - NUNCA sabe como se almacenan los datos             |
++=========================+===============================+
+                          |
+                          v
++=========================+===============================+
+|          CAPA DE ACCESO A DATOS (DAL)                   |
+|          Data Access Layer / Repository                 |
+|   - Encapsula TODA la logica de acceso a BD            |
+|   - Implementa el patron Repository                    |
+|   - LINQ: Query Syntax, Include, Where, AsNoTracking  |
+|   - Traduce consultas LINQ a SQL via EF Core           |
+|   - NUNCA contiene reglas de negocio                   |
++=========================+===============================+
+                          |
+                          v
++=========================+===============================+
+|              CAPA DE ENTIDADES / DATOS                  |
+|              Entity Layer / Models                      |
+|   - Clases POCO que representan tablas SQL             |
+|   - Data Annotations / Fluent API                      |
+|   - DTOs para transferencia entre capas               |
+|   - DbContext y configuracion EF Core                  |
+|   - Es la capa mas compartida (todas dependen de ella) |
++=========================================================+
+                          |
+                  +-------v-------+
+                  |   SQL Server   |
+                  |   (Tablas, SPs)|
+                  +---------------+
 ```
 
-### Capa 1 — Modelos (Data Layer)
+### 13.2 Flujo de Datos entre Capas
+
+```
+Usuario pulsa "Buscar Laptop"
+        |
+        v
+[PRESENTACION] ProductosController.Buscar("Laptop")
+        |                     |
+        |  llama a           |  retorna ProductoDTO[]
+        v                     ^
+[BLL/SERVICIO] ProductoService.BuscarAsync("Laptop")
+        |                     |
+        |  llama a           |  retorna IEnumerable<Producto>
+        v                     ^
+[DAL/REPOSITORIO] ProductoRepository.BuscarAsync("Laptop")
+        |                     |
+        |  ejecuta LINQ      |  retorna datos de SQL
+        v                     ^
+[ENTIDADES/EF CORE] ctx.Productos.Where(p => p.Nombre.Contains("Laptop"))
+        |                     |
+        |  traduce a SQL     |  retorna resultado SQL
+        v                     ^
+[SQL SERVER] SELECT * FROM Productos WHERE Nombre LIKE '%Laptop%'
+```
+
+### 13.3 Tabla de Responsabilidades por Capa
+
+| Aspecto | Presentacion (UI) | BLL (Servicio) | DAL (Repositorio) | Entidades |
+|---------|-------------------|----------------|-------------------|-----------|
+| **Responsabilidad** | Interactuar con el usuario | Logica de negocio | Acceso a datos | Modelos de datos |
+| **Conoce la BD?** | No | No | Si | Si (mapeo) |
+| **Conoce LINQ?** | Si (formateo) | Si (validaciones, calculos) | Si (consultas SQL) | Si (Expression) |
+| **Tipo de retorno** | Vista / JSON / HTML | DTOs | Entidades | POCO classes |
+| **Puede fallar por** | Validacion de entrada | Regla de negocio violada | Conexion BD, query invalido | Mapeo incorrecto |
+| **Se prueba con** | Pruebas E2E / Integracion | Pruebas unitarias (mock repo) | Pruebas integracion (BD real) | Pruebas unitarias simples |
+| **Tecnologias** | ASP.NET, Blazor, Consola | C# puro, LINQ to Objects | EF Core, LINQ to SQL | Data Annotations, Fluent API |
+| **Patrones** | MVC, MVVM, Controller-Service | Service, Validator, Specification | Repository, Unit of Work | POCO, DTO, ViewModel |
+
+### 13.4 Estructura Completa de la Solucion en Visual Studio
+
+```
+LINQ_4Capas.sln
+|
++-- Entidades/                              [Class Library - .NET 8]
+|   +-- Entidades.csproj
+|   +-- Producto.cs                         <- Entidad POCO
+|   +-- Categoria.cs                        <- Entidad POCO
+|   +-- Empleado.cs                         <- Entidad POCO
+|   +-- Venta.cs                            <- Entidad POCO
+|   +-- DetalleVenta.cs                     <- Entidad POCO
+|   +-- DTOs/
+|   |   +-- ProductoDTO.cs                  <- DTO de lectura
+|   |   +-- CrearProductoDTO.cs             <- DTO de creacion
+|   |   +-- ActualizarProductoDTO.cs        <- DTO de actualizacion
+|   |   +-- VentaDTO.cs                     <- DTO de venta
+|   |   +-- ResumenProductosDTO.cs          <- DTO de resumen/agregados
+|   |   +-- ReporteVentasDTO.cs             <- DTO de reportes
+|   +-- Enums/
+|       +-- EstadoProducto.cs               <- Enum: Activo, Inactivo, Descontinuado
+|       +-- TipoVenta.cs                    <- Enum: Contado, Credito
+|
++-- DAL/                                    [Class Library - .NET 8]
+|   +-- DAL.csproj
+|   +-- AppDbContext.cs                     <- DbContext de EF Core
+|   +-- Configuraciones/                   <- Fluent API por entidad
+|   |   +-- ProductoConfig.cs
+|   |   +-- CategoriaConfig.cs
+|   |   +-- VentaConfig.cs
+|   +-- Interfaces/
+|   |   +-- IRepositorio.cs                <- Repositorio generico interfaz
+|   |   +-- IProductoRepositorio.cs        <- Repositorio especifico interfaz
+|   |   +-- IVentaRepositorio.cs           <- Repositorio especifico interfaz
+|   |   +-- IUnitOfWork.cs                 <- Unit of Work interfaz
+|   +-- Repositorios/
+|   |   +-- Repositorio.cs                 <- Repositorio generico implementacion
+|   |   +-- ProductoRepositorio.cs         <- Repositorio especifico
+|   |   +-- VentaRepositorio.cs            <- Repositorio especifico
+|   |   +-- UnitOfWork.cs                  <- Unit of Work implementacion
+|   +-- Migrations/                         <- Migraciones EF Core
+|
++-- BLL/                                    [Class Library - .NET 8]
+|   +-- BLL.csproj
+|   +-- Interfaces/
+|   |   +-- IProductoServicio.cs           <- Servicio interfaz
+|   |   +-- IVentaServicio.cs              <- Servicio interfaz
+|   |   +-- IReporteServicio.cs            <- Servicio interfaz
+|   +-- Servicios/
+|   |   +-- ProductoServicio.cs            <- Servicio implementacion
+|   |   +-- VentaServicio.cs               <- Servicio implementacion
+|   |   +-- ReporteServicio.cs             <- Reportes con LINQ avanzado
+|   +-- Validadores/
+|   |   +-- ProductoValidador.cs           <- Validaciones de negocio
+|   |   +-- VentaValidador.cs              <- Validaciones de negocio
+|   +-- Excepciones/
+|       +-- ReglaNegocioExcepcion.cs       <- Excepcion personalizada
+|       +-- EntidadNoEncontradaExcepcion.cs
+|
++-- Presentacion/                           [Console / Web API / Blazor]
+|   +-- Presentacion.csproj
+|   +-- Program.cs                          <- Configuracion DI + inicio
+|   +-- Controllers/                        [Si es Web API]
+|   |   +-- ProductosController.cs
+|   |   +-- VentasController.cs
+|   |   +-- ReportesController.cs
+|   +-- Pages/                              [Si es Blazor/Razor]
+|       +-- Productos.razor
+|
++-- Tests/
+    +-- Tests.BLL/
+    |   +-- ProductoServicioTests.cs
+    |   +-- VentaServicioTests.cs
+    +-- Tests.DAL/
+        +-- ProductoRepositorioTests.cs
+        +-- RepositorioGenericoTests.cs
+```
+
+### 13.5 Capa 1 — Entidades (Entity Layer)
+
+La Capa de Entidades es la capa mas simple pero mas compartida del sistema. Contiene las clases POCO (Plain Old CLR Objects) que representan las tablas de SQL Server, los DTOs que se usan para transferir datos entre capas, y las configuraciones de mapeo. Todas las demas capas dependen de ella, pero ella no depende de ninguna. Es el unico proyecto que puede ser referenciado por todos los demas sin crear dependencias circulares.
 
 ```csharp
-// Models/Producto.cs
-namespace Tienda.Models;
+// ============================================
+// Entidades/Producto.cs
+// ============================================
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
-public class Producto
+namespace Entidades
 {
-    public int      Id             { get; set; }
-    public string   Nombre         { get; set; } = "";
-    public string   Categoria      { get; set; } = "";
-    public decimal  Precio         { get; set; }
-    public int      Stock          { get; set; }
-    public bool     Activo         { get; set; }
-    public DateTime FechaCreacion  { get; set; } = DateTime.Now;
+    [Table("Productos")]
+    public class Producto
+    {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int Id { get; set; }
 
-    // Relaciones
-    public ICollection<Venta> Ventas { get; set; } = new List<Venta>();
+        [Required]
+        [StringLength(200)]
+        public string Nombre { get; set; } = string.Empty;
+
+        [StringLength(1000)]
+        public string? Descripcion { get; set; }
+
+        [Required]
+        [Column(TypeName = "decimal(18,2)")]
+        public decimal Precio { get; set; }
+
+        [Required]
+        public int Stock { get; set; }
+
+        [Required]
+        [ForeignKey(nameof(Categoria))]
+        public int CategoriaId { get; set; }
+
+        public bool Activo { get; set; } = true;
+
+        public DateTime FechaCreacion { get; set; } = DateTime.Now;
+
+        // Propiedades de navegacion EF Core
+        public virtual Categoria? Categoria { get; set; }
+        public virtual ICollection<Venta> Ventas { get; set; } = new List<Venta>();
+    }
 }
 
-// DTOs/ProductoDTO.cs
-public class ProductoDTO
+// ============================================
+// Entidades/Categoria.cs
+// ============================================
+namespace Entidades
 {
-    public int     Id               { get; set; }
-    public string  Nombre           { get; set; } = "";
-    public string  Categoria        { get; set; } = "";
-    public decimal Precio           { get; set; }
-    public string  PrecioFormateado { get; set; } = "";
-    public string  Disponibilidad   { get; set; } = "";
+    [Table("Categorias")]
+    public class Categoria
+    {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int Id { get; set; }
+
+        [Required]
+        [StringLength(100)]
+        public string Nombre { get; set; } = string.Empty;
+
+        [StringLength(500)]
+        public string? Descripcion { get; set; }
+
+        public bool Activa { get; set; } = true;
+
+        public DateTime FechaCreacion { get; set; } = DateTime.Now;
+
+        // Propiedad de navegacion inversa
+        public virtual ICollection<Producto> Productos { get; set; } = new List<Producto>();
+    }
 }
 
-public class ResumenProductosDto
+// ============================================
+// Entidades/Empleado.cs
+// ============================================
+namespace Entidades
 {
-    public int     TotalProductos  { get; set; }
-    public decimal ValorInventario { get; set; }
-    public decimal PrecioPromedio  { get; set; }
-    public decimal PrecioMinimo    { get; set; }
-    public decimal PrecioMaximo    { get; set; }
-    public int     TotalUnidades   { get; set; }
+    [Table("Empleados")]
+    public class Empleado
+    {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int Id { get; set; }
+
+        [Required]
+        [StringLength(100)]
+        public string Nombre { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(100)]
+        public string Apellido { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(50)]
+        public string Departamento { get; set; } = string.Empty;
+
+        [Required]
+        [Column(TypeName = "decimal(18,2)")]
+        public decimal Salario { get; set; }
+
+        [Required]
+        public DateTime FechaIngreso { get; set; }
+
+        public bool Activo { get; set; } = true;
+
+        // Propiedad de navegacion
+        public virtual ICollection<Venta> Ventas { get; set; } = new List<Venta>();
+
+        // Propiedad calculada (no se almacena en BD)
+        [NotMapped]
+        public string NombreCompleto => $"{Nombre} {Apellido}";
+
+        [NotMapped]
+        public int AntiguedadAnos => (int)((DateTime.Now - FechaIngreso).TotalDays / 365.25);
+    }
 }
 
-// Context/TiendaContext.cs
-public class TiendaContext : DbContext
+// ============================================
+// Entidades/Venta.cs
+// ============================================
+namespace Entidades
 {
-    public TiendaContext(DbContextOptions<TiendaContext> options) : base(options) { }
+    [Table("Ventas")]
+    public class Venta
+    {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int Id { get; set; }
 
-    public DbSet<Producto> Productos { get; set; }
-    public DbSet<Cliente>  Clientes  { get; set; }
-    public DbSet<Venta>    Ventas    { get; set; }
+        [Required]
+        public int ProductoId { get; set; }
+
+        [Required]
+        public int Cantidad { get; set; }
+
+        [Required]
+        [Column(TypeName = "decimal(18,2)")]
+        public decimal PrecioUnitario { get; set; }
+
+        public DateTime FechaVenta { get; set; } = DateTime.Now;
+
+        [Required]
+        public int VendedorId { get; set; }
+
+        // Propiedad de navegacion
+        public virtual Producto? Producto { get; set; }
+        public virtual Empleado? Vendedor { get; set; }
+
+        // Propiedad calculada
+        [NotMapped]
+        public decimal Total => Cantidad * PrecioUnitario;
+    }
+}
+
+// ============================================
+// Entidades/Enums/EstadoProducto.cs
+// ============================================
+namespace Entidades.Enums
+{
+    public enum EstadoProducto
+    {
+        Activo = 1,
+        Inactivo = 0,
+        Descontinuado = 2
+    }
 }
 ```
 
-### Capa 2 — Repositorio (Data Access / LINQ)
+#### DTOs (Data Transfer Objects)
+
+Los DTOs son objetos simples que se usan para transferir datos entre capas. Evitan exponer las entidades directamente, lo que permite cambiar la estructura de la base de datos sin afectar la API o la interfaz. Cada operacion puede tener su propio DTO con solo los campos necesarios.
 
 ```csharp
-// Repositories/IProductoRepository.cs
-namespace Tienda.Repositories;
-
-public interface IProductoRepository
+// ============================================
+// Entidades/DTOs/ProductoDTO.cs — Lectura
+// ============================================
+namespace Entidades.DTOs
 {
-    Task<IEnumerable<Producto>> ObtenerTodosAsync();
-    Task<IEnumerable<Producto>> ObtenerActivosAsync();
-    Task<Producto?>             ObtenerPorIdAsync(int id);
-    Task<IEnumerable<Producto>> BuscarAsync(string termino);
-    Task<IEnumerable<Producto>> ObtenerPorCategoriaAsync(string categoria);
-    Task<IEnumerable<Producto>> ObtenerStockBajoAsync(int umbral = 5);
-    Task<ResumenProductosDto>   ObtenerResumenAsync();
-    Task<Producto>              CrearAsync(Producto producto);
-    Task<Producto>              ActualizarAsync(Producto producto);
-    Task                        EliminarAsync(int id);
+    public class ProductoDTO
+    {
+        public int Id { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public string Descripcion { get; set; } = string.Empty;
+        public decimal Precio { get; set; }
+        public int Stock { get; set; }
+        public string Categoria { get; set; } = string.Empty;
+        public int CategoriaId { get; set; }
+        public decimal PrecioConIVA => Precio * 1.16m;
+        public string Estado => Stock > 20 ? "Disponible" :
+                                Stock > 0  ? "Bajo Stock" : "Agotado";
+        public string EstadoFormateado => $"[{Estado}] {Nombre} - ${PrecioConIVA:F2}";
+    }
+
+    // ============================================
+    // Entidades/DTOs/CrearProductoDTO.cs — Creacion
+    // ============================================
+    public class CrearProductoDTO
+    {
+        public string Nombre { get; set; } = string.Empty;
+        public string? Descripcion { get; set; }
+        public decimal Precio { get; set; }
+        public int Stock { get; set; }
+        public int CategoriaId { get; set; }
+    }
+
+    // ============================================
+    // Entidades/DTOs/ActualizarProductoDTO.cs — Actualizacion
+    // ============================================
+    public class ActualizarProductoDTO
+    {
+        public int Id { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public string? Descripcion { get; set; }
+        public decimal Precio { get; set; }
+        public int Stock { get; set; }
+        public int CategoriaId { get; set; }
+        public bool Activo { get; set; }
+    }
+
+    // ============================================
+    // Entidades/DTOs/VentaDTO.cs
+    // ============================================
+    public class VentaDTO
+    {
+        public int Id { get; set; }
+        public string Producto { get; set; } = string.Empty;
+        public int Cantidad { get; set; }
+        public decimal PrecioUnitario { get; set; }
+        public decimal Total => Cantidad * PrecioUnitario;
+        public string Vendedor { get; set; } = string.Empty;
+        public DateTime FechaVenta { get; set; }
+    }
+
+    // ============================================
+    // Entidades/DTOs/ResumenProductosDTO.cs — Agregados
+    // ============================================
+    public class ResumenProductosDTO
+    {
+        public int TotalProductos { get; set; }
+        public decimal ValorInventario { get; set; }
+        public decimal PrecioPromedio { get; set; }
+        public decimal PrecioMinimo { get; set; }
+        public decimal PrecioMaximo { get; set; }
+        public int TotalUnidades { get; set; }
+        public int ProductosActivos { get; set; }
+        public int ProductosAgotados { get; set; }
+        public int ProductosBajoStock { get; set; }
+    }
+
+    // ============================================
+    // Entidades/DTOs/ReporteVentasDTO.cs — Reportes
+    // ============================================
+    public class ReporteVentasDTO
+    {
+        public int Ano { get; set; }
+        public int TotalVentas { get; set; }
+        public decimal IngresoTotal { get; set; }
+        public decimal TicketPromedio { get; set; }
+        public decimal VentaMaxima { get; set; }
+        public decimal VentaMinima { get; set; }
+        public List<IngresoPorMesDTO> IngresosPorMes { get; set; } = new();
+        public List<TopClienteDTO> TopClientes { get; set; } = new();
+        public List<TopCategoriaDTO> TopCategorias { get; set; } = new();
+    }
+
+    public class IngresoPorMesDTO
+    {
+        public int Mes { get; set; }
+        public string NombreMes { get; set; } = "";
+        public decimal Total { get; set; }
+        public int CantidadVentas { get; set; }
+        public decimal VariacionPorcentual { get; set; }
+    }
+
+    public class TopClienteDTO
+    {
+        public string Cliente { get; set; } = "";
+        public decimal TotalGastado { get; set; }
+        public int CantidadPedidos { get; set; }
+    }
+
+    public class TopCategoriaDTO
+    {
+        public string Categoria { get; set; } = "";
+        public int CantidadVendida { get; set; }
+        public decimal Ingresos { get; set; }
+    }
+
+    // ============================================
+    // Entidades/DTOs/EmpleadoDTO.cs
+    // ============================================
+    public class EmpleadoDTO
+    {
+        public int Id { get; set; }
+        public string NombreCompleto { get; set; } = string.Empty;
+        public string Departamento { get; set; } = string.Empty;
+        public decimal Salario { get; set; }
+        public int AntiguedadAnos { get; set; }
+        public int TotalVentas { get; set; }
+        public decimal MontoTotalVentas { get; set; }
+    }
 }
+```
 
-// Repositories/ProductoRepository.cs
-public class ProductoRepository : IProductoRepository
+### 13.6 Capa 2 — Acceso a Datos (DAL / Repository)
+
+La Capa de Acceso a Datos encapsula toda la logica de interaccion con la base de datos. Implementa el patron **Repository** para abstraer las operaciones CRUD y el patron **Unit of Work** para manejar transacciones. Cada repositorio utiliza LINQ para construir consultas que EF Core traduce a SQL y se ejecutan en SQL Server. La DAL es la unica capa que conoce sobre Entity Framework, cadenas de conexion y la estructura de la base de datos.
+
+```csharp
+// ============================================
+// DAL/AppDbContext.cs — Contexto de EF Core
+// ============================================
+using Microsoft.EntityFrameworkCore;
+using Entidades;
+
+namespace DAL
 {
-    private readonly TiendaContext _ctx;
-
-    public ProductoRepository(TiendaContext ctx) => _ctx = ctx;
-
-    // LINQ: obtener todos los activos ordenados
-    public async Task<IEnumerable<Producto>> ObtenerActivosAsync() =>
-        await _ctx.Productos
-            .Where(p => p.Activo)
-            .OrderBy(p => p.Categoria)
-            .ThenBy(p => p.Nombre)
-            .AsNoTracking()
-            .ToListAsync();
-
-    // LINQ: busqueda de texto
-    public async Task<IEnumerable<Producto>> BuscarAsync(string termino) =>
-        await _ctx.Productos
-            .Where(p => p.Activo &&
-                        (p.Nombre.Contains(termino) ||
-                         p.Categoria.Contains(termino)))
-            .OrderBy(p => p.Nombre)
-            .AsNoTracking()
-            .ToListAsync();
-
-    // LINQ: stock bajo
-    public async Task<IEnumerable<Producto>> ObtenerStockBajoAsync(int umbral = 5) =>
-        await _ctx.Productos
-            .Where(p => p.Activo && p.Stock <= umbral)
-            .OrderBy(p => p.Stock)
-            .AsNoTracking()
-            .ToListAsync();
-
-    // LINQ: resumen con AGREGADOS
-    public async Task<ResumenProductosDto> ObtenerResumenAsync()
+    public class AppDbContext : DbContext
     {
-        var stats = await _ctx.Productos
-            .Where(p => p.Activo)
-            .GroupBy(_ => 1)
-            .Select(g => new ResumenProductosDto
-            {
-                TotalProductos   = g.Count(),
-                ValorInventario  = g.Sum(p => p.Precio * p.Stock),
-                PrecioPromedio   = g.Average(p => p.Precio),
-                PrecioMinimo     = g.Min(p => p.Precio),
-                PrecioMaximo     = g.Max(p => p.Precio),
-                TotalUnidades    = g.Sum(p => p.Stock)
-            })
-            .FirstOrDefaultAsync();
+        public AppDbContext(DbContextOptions<AppDbContext> options)
+            : base(options) { }
 
-        return stats ?? new ResumenProductosDto();
-    }
+        // DbSets — Representan las tablas de SQL Server
+        public DbSet<Producto> Productos { get; set; }
+        public DbSet<Categoria> Categorias { get; set; }
+        public DbSet<Empleado> Empleados { get; set; }
+        public DbSet<Venta> Ventas { get; set; }
 
-    public async Task<Producto> CrearAsync(Producto producto)
-    {
-        _ctx.Productos.Add(producto);
-        await _ctx.SaveChangesAsync();
-        return producto;
-    }
-
-    public async Task<Producto> ActualizarAsync(Producto producto)
-    {
-        _ctx.Productos.Update(producto);
-        await _ctx.SaveChangesAsync();
-        return producto;
-    }
-
-    public async Task EliminarAsync(int id)
-    {
-        var producto = await _ctx.Productos.FindAsync(id);
-        if (producto != null)
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            producto.Activo = false; // Soft delete
-            await _ctx.SaveChangesAsync();
+            // Aplicar todas las configuraciones desde el assembly
+            modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+
+            // Configuracion Fluent API (alternativa a Data Annotations)
+            modelBuilder.Entity<Producto>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Precio).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.Nombre).HasMaxLength(200).IsRequired();
+                entity.HasOne(e => e.Categoria)
+                      .WithMany(c => c.Productos)
+                      .HasForeignKey(e => e.CategoriaId)
+                      .OnDelete(DeleteBehavior.Restrict);
+
+                // Indice para busqueda frecuente
+                entity.HasIndex(e => e.Nombre);
+                entity.HasIndex(e => new { e.CategoriaId, e.Activo });
+            });
+
+            modelBuilder.Entity<Venta>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.PrecioUnitario).HasColumnType("decimal(18,2)");
+                entity.HasOne(e => e.Producto)
+                      .WithMany(p => p.Ventas)
+                      .HasForeignKey(e => e.ProductoId);
+                entity.HasOne(e => e.Vendedor)
+                      .WithMany(v => v.Ventas)
+                      .HasForeignKey(e => e.VendedorId);
+
+                entity.HasIndex(e => e.FechaVenta);
+            });
+
+            // Seed data — datos iniciales
+            modelBuilder.Entity<Categoria>().HasData(
+                new Categoria { Id = 1, Nombre = "Computo",        Descripcion = "Equipos de computo" },
+                new Categoria { Id = 2, Nombre = "Accesorio",      Descripcion = "Perifericos" },
+                new Categoria { Id = 3, Nombre = "Almacenamiento", Descripcion = "Dispositivos de almacenamiento" },
+                new Categoria { Id = 4, Nombre = "Impresion",      Descripcion = "Impresoras y suministros" }
+            );
+
+            // Filtro global: excluir productos inactivos por defecto
+            modelBuilder.Entity<Producto>()
+                .HasQueryFilter(p => p.Activo);
         }
     }
 }
 ```
 
-### Capa 3 — Servicio (Business Logic)
+#### Interfaz y Repositorio Generico
 
 ```csharp
-// Services/IProductoService.cs
-namespace Tienda.Services;
+// ============================================
+// DAL/Interfaces/IRepositorio.cs
+// ============================================
+using System.Linq.Expressions;
 
-public interface IProductoService
+namespace DAL.Interfaces
 {
-    Task<IEnumerable<ProductoDTO>> ObtenerCatalogoAsync();
-    Task<ProductoDTO?>             ObtenerDetalleAsync(int id);
-    Task<IEnumerable<ProductoDTO>> BuscarAsync(string termino);
-    Task<ResumenProductosDto>      ObtenerResumenAsync();
-    Task<ProductoDTO>              CrearProductoAsync(CrearProductoDto dto);
-    Task<bool>                     ActualizarPrecioAsync(int id, decimal nuevoPrecio);
+    public interface IRepositorio<T> where T : class
+    {
+        // ── Consultas LINQ diferidas ──
+        IEnumerable<T> ObtenerTodos();
+        IEnumerable<T> Obtener(Expression<Func<T, bool>> filtro);
+        T? ObtenerPorId(int id);
+
+        // ── Consultas LINQ avanzadas con parametros ──
+        IEnumerable<T> Obtener(
+            Expression<Func<T, bool>>? filtro = null,
+            Func<IQueryable<T>, IOrderedQueryable<T>>? ordenarPor = null,
+            string? propiedadesIncluidas = null,
+            int? pagina = null,
+            int? tamanoPagina = null);
+
+        // ── Agregados con LINQ ──
+        int Contar(Expression<Func<T, bool>>? filtro = null);
+        long ContarLargo(Expression<Func<T, bool>>? filtro = null);
+        decimal Sumar(Expression<Func<T, decimal>> selector,
+                      Expression<Func<T, bool>>? filtro = null);
+        double Promediar(Expression<Func<T, double>> selector,
+                         Expression<Func<T, bool>>? filtro = null);
+        T? Primero(Expression<Func<T, bool>> filtro);
+        bool Existe(Expression<Func<T, bool>> filtro);
+
+        // ── CRUD ──
+        void Agregar(T entidad);
+        void AgregarRango(IEnumerable<T> entidades);
+        void Actualizar(T entidad);
+        void Eliminar(int id);
+        void Eliminar(T entidad);
+        void EliminarRango(IEnumerable<T> entidades);
+    }
 }
 
-// Services/ProductoService.cs
-public class ProductoService : IProductoService
+// ============================================
+// DAL/Interfaces/IProductoRepositorio.cs
+// ============================================
+namespace DAL.Interfaces
 {
-    private readonly IProductoRepository _repo;
-    private readonly ILogger<ProductoService> _logger;
-
-    public ProductoService(IProductoRepository repo, ILogger<ProductoService> logger)
+    public interface IProductoRepositorio : IRepositorio<Producto>
     {
-        _repo   = repo;
-        _logger = logger;
+        // Metodos especificos de Producto con LINQ avanzado
+        Task<IEnumerable<Producto>> ObtenerConCategoriaAsync();
+        Task<IEnumerable<Producto>> ObtenerPorCategoriaAsync(int categoriaId);
+        Task<IEnumerable<Producto>> ObtenerStockBajoAsync(int limiteStock = 10);
+        Task<IEnumerable<Producto>> BuscarAsync(string termino);
+        Task<object> EstadisticasPorCategoriaAsync();
+        Task<ResumenProductosDTO> ObtenerResumenAsync();
     }
+}
 
-    public async Task<IEnumerable<ProductoDTO>> ObtenerCatalogoAsync()
+// ============================================
+// DAL/Interfaces/IUnitOfWork.cs
+// ============================================
+namespace DAL.Interfaces
+{
+    public interface IUnitOfWork : IDisposable
     {
-        var productos = await _repo.ObtenerActivosAsync();
+        IProductoRepositorio Productos { get; }
+        IRepositorio<Venta> Ventas { get; }
+        IRepositorio<Categoria> Categorias { get; }
+        IRepositorio<Empleado> Empleados { get; }
 
-        // LINQ en la capa de servicio: transformacion a DTO
-        return productos.Select(p => new ProductoDTO
+        Task<int> GuardarCambiosAsync(CancellationToken ct = default);
+        Task<bool> GuardarCambiosConValidacionAsync();
+    }
+}
+```
+
+#### Implementacion del Repositorio Generico
+
+```csharp
+// ============================================
+// DAL/Repositorios/Repositorio.cs
+// ============================================
+using Microsoft.EntityFrameworkCore;
+using DAL.Interfaces;
+using System.Linq.Expressions;
+
+namespace DAL
+{
+    public class Repositorio<T> : IRepositorio<T> where T : class
+    {
+        protected readonly AppDbContext _context;
+        protected readonly DbSet<T> _dbSet;
+
+        public Repositorio(AppDbContext context)
         {
-            Id               = p.Id,
-            Nombre           = p.Nombre,
-            Categoria        = p.Categoria,
-            Precio           = p.Precio,
-            PrecioFormateado = $"${p.Precio:N2}",
-            Disponibilidad   = p.Stock switch
+            _context = context;
+            _dbSet = context.Set<T>();
+        }
+
+        // ── Obtener Todos ──
+        public virtual IEnumerable<T> ObtenerTodos()
+        {
+            return _dbSet.AsNoTracking().ToList();
+        }
+
+        // ── Obtener con filtro LINQ ──
+        public virtual IEnumerable<T> Obtener(Expression<Func<T, bool>> filtro)
+        {
+            return _dbSet.Where(filtro).AsNoTracking().ToList();
+        }
+
+        // ── Obtener por ID ──
+        public virtual T? ObtenerPorId(int id)
+        {
+            return _dbSet.Find(id);
+        }
+
+        // ── Obtener completo con LINQ avanzado ──
+        public virtual IEnumerable<T> Obtener(
+            Expression<Func<T, bool>>? filtro = null,
+            Func<IQueryable<T>, IOrderedQueryable<T>>? ordenarPor = null,
+            string? propiedadesIncluidas = null,
+            int? pagina = null,
+            int? tamanoPagina = null)
+        {
+            IQueryable<T> consulta = _dbSet;
+
+            // Aplicar filtro Where
+            if (filtro != null)
+                consulta = consulta.Where(filtro);
+
+            // Incluir propiedades de navegacion (Eager Loading)
+            if (!string.IsNullOrEmpty(propiedadesIncluidas))
             {
-                0     => "Sin stock",
-                <= 5  => "Poco stock",
-                <= 20 => "Stock normal",
-                _     => "Stock alto"
+                foreach (var prop in propiedadesIncluidas.Split(',',
+                    StringSplitOptions.RemoveEmptyEntries))
+                    consulta = consulta.Include(prop.Trim());
             }
-        });
-    }
 
-    public async Task<ProductoDTO> CrearProductoAsync(CrearProductoDto dto)
-    {
-        if (dto.Precio <= 0)
-            throw new ArgumentException("El precio debe ser mayor a cero.");
+            // Aplicar ordenamiento (OrderBy / ThenBy)
+            if (ordenarPor != null)
+                consulta = ordenarPor(consulta);
 
-        var producto = new Producto
+            // Aplicar paginacion (Skip + Take)
+            if (pagina.HasValue && tamanoPagina.HasValue)
+                consulta = consulta
+                    .Skip((pagina.Value - 1) * tamanoPagina.Value)
+                    .Take(tamanoPagina.Value);
+
+            return consulta.AsNoTracking().ToList();
+        }
+
+        // ── Contar con LINQ ──
+        public int Contar(Expression<Func<T, bool>>? filtro = null)
         {
-            Nombre    = dto.Nombre.Trim(),
-            Categoria = dto.Categoria,
-            Precio    = dto.Precio,
-            Stock     = dto.Stock,
-            Activo    = true
-        };
+            return filtro == null
+                ? _dbSet.Count()
+                : _dbSet.Count(filtro);
+        }
 
-        var creado = await _repo.CrearAsync(producto);
-        _logger.LogInformation("Producto creado: {Id} - {Nombre}", creado.Id, creado.Nombre);
+        public long ContarLargo(Expression<Func<T, bool>>? filtro = null)
+        {
+            return filtro == null
+                ? _dbSet.LongCount()
+                : _dbSet.LongCount(filtro);
+        }
 
-        return new ProductoDTO { Id = creado.Id, Nombre = creado.Nombre };
+        // ── Sumar con LINQ ──
+        public decimal Sumar(Expression<Func<T, decimal>> selector,
+                             Expression<Func<T, bool>>? filtro = null)
+        {
+            return filtro == null
+                ? _dbSet.Sum(selector)
+                : _dbSet.Where(filtro).Sum(selector);
+        }
+
+        // ── Promediar con LINQ ──
+        public double Promediar(Expression<Func<T, double>> selector,
+                                Expression<Func<T, bool>>? filtro = null)
+        {
+            return filtro == null
+                ? _dbSet.Average(selector)
+                : _dbSet.Where(filtro).Average(selector);
+        }
+
+        // ── Primero con LINQ ──
+        public T? Primero(Expression<Func<T, bool>> filtro)
+        {
+            return _dbSet.FirstOrDefault(filtro);
+        }
+
+        // ── Existe con LINQ Any ──
+        public bool Existe(Expression<Func<T, bool>> filtro)
+        {
+            return _dbSet.Any(filtro);
+        }
+
+        // ── CRUD ──
+        public void Agregar(T entidad) => _dbSet.Add(entidad);
+        public void AgregarRango(IEnumerable<T> entidades) => _dbSet.AddRange(entidades);
+        public void Actualizar(T entidad) => _dbSet.Update(entidad);
+        public void Eliminar(int id) => _dbSet.Remove(ObtenerPorId(id)!);
+        public void Eliminar(T entidad) => _dbSet.Remove(entidad);
+        public void EliminarRango(IEnumerable<T> entidades) => _dbSet.RemoveRange(entidades);
     }
 }
 ```
 
-### Capa 4 — Presentacion (Controller / API)
+#### Repositorio Especifico de Producto
 
 ```csharp
-// Controllers/ProductosController.cs
-namespace Tienda.Controllers;
+// ============================================
+// DAL/Repositorios/ProductoRepositorio.cs
+// ============================================
+using Microsoft.EntityFrameworkCore;
+using Entidades;
+using Entidades.DTOs;
+using DAL.Interfaces;
 
-[ApiController]
-[Route("api/[controller]")]
-public class ProductosController : ControllerBase
+namespace DAL
 {
-    private readonly IProductoService _service;
-
-    public ProductosController(IProductoService service) => _service = service;
-
-    [HttpGet]
-    public async Task<IActionResult> GetCatalogo() =>
-        Ok(await _service.ObtenerCatalogoAsync());
-
-    [HttpGet("buscar")]
-    public async Task<IActionResult> Buscar([FromQuery] string q)
+    public class ProductoRepositorio : Repositorio<Producto>, IProductoRepositorio
     {
-        if (string.IsNullOrWhiteSpace(q))
-            return BadRequest("El termino de busqueda no puede estar vacio.");
-        return Ok(await _service.BuscarAsync(q));
-    }
+        public ProductoRepositorio(AppDbContext context) : base(context) { }
 
-    [HttpGet("resumen")]
-    public async Task<IActionResult> GetResumen() =>
-        Ok(await _service.ObtenerResumenAsync());
+        // LINQ: Productos con su categoria (Include — Eager Loading)
+        public async Task<IEnumerable<Producto>> ObtenerConCategoriaAsync()
+        {
+            return await _dbSet
+                .Include(p => p.Categoria)
+                .AsNoTracking()
+                .ToListAsync();
+        }
 
-    [HttpPost]
-    public async Task<IActionResult> Crear([FromBody] CrearProductoDto dto)
-    {
-        var creado = await _service.CrearProductoAsync(dto);
-        return CreatedAtAction(nameof(GetCatalogo), new { id = creado.Id }, creado);
+        // LINQ: Productos por categoria con Where + Include
+        public async Task<IEnumerable<Producto>> ObtenerPorCategoriaAsync(int categoriaId)
+        {
+            return await _dbSet
+                .Where(p => p.CategoriaId == categoriaId && p.Activo)
+                .OrderBy(p => p.Nombre)
+                .Include(p => p.Categoria)
+                .AsNoTracking()
+                .ToListAsync();
+        }
+
+        // LINQ: Productos con stock bajo
+        public async Task<IEnumerable<Producto>> ObtenerStockBajoAsync(int limiteStock = 10)
+        {
+            return await _dbSet
+                .Where(p => p.Stock <= limiteStock && p.Activo)
+                .OrderBy(p => p.Stock)
+                .Include(p => p.Categoria)
+                .AsNoTracking()
+                .ToListAsync();
+        }
+
+        // LINQ: Busqueda con Contains (se traduce a LIKE en SQL)
+        public async Task<IEnumerable<Producto>> BuscarAsync(string termino)
+        {
+            return await _dbSet
+                .Where(p => p.Nombre.Contains(termino) ||
+                            (p.Descripcion != null && p.Descripcion.Contains(termino)))
+                .OrderBy(p => p.Nombre)
+                .AsNoTracking()
+                .ToListAsync();
+        }
+
+        // LINQ: Estadisticas por categoria con GroupBy + Agregados
+        // Se traduce a: SELECT Categoria, COUNT(*), AVG(Precio), MAX(Precio), SUM(Stock)...
+        public async Task<object> EstadisticasPorCategoriaAsync()
+        {
+            return await _dbSet
+                .Include(p => p.Categoria)
+                .Where(p => p.Activo)
+                .GroupBy(p => p.Categoria!.Nombre)
+                .Select(g => new
+                {
+                    Categoria = g.Key,
+                    Cantidad = g.Count(),
+                    PrecioPromedio = g.Average(p => p.Precio),
+                    PrecioMaximo = g.Max(p => p.Precio),
+                    PrecioMinimo = g.Min(p => p.Precio),
+                    StockTotal = g.Sum(p => p.Stock),
+                    ValorInventario = g.Sum(p => p.Precio * p.Stock)
+                })
+                .OrderByDescending(x => x.ValorInventario)
+                .ToListAsync();
+        }
+
+        // LINQ: Resumen completo con multiples agregados en una sola query
+        public async Task<ResumenProductosDTO> ObtenerResumenAsync()
+        {
+            var stats = await _dbSet
+                .Where(p => p.Activo)
+                .GroupBy(_ => 1)
+                .Select(g => new ResumenProductosDTO
+                {
+                    TotalProductos = g.Count(),
+                    ValorInventario = g.Sum(p => p.Precio * p.Stock),
+                    PrecioPromedio = g.Average(p => p.Precio),
+                    PrecioMinimo = g.Min(p => p.Precio),
+                    PrecioMaximo = g.Max(p => p.Precio),
+                    TotalUnidades = g.Sum(p => p.Stock),
+                    ProductosActivos = g.Count(p => p.Activo),
+                    ProductosAgotados = g.Count(p => p.Stock == 0),
+                    ProductosBajoStock = g.Count(p => p.Stock > 0 && p.Stock <= 10)
+                })
+                .FirstOrDefaultAsync();
+
+            return stats ?? new ResumenProductosDTO();
+        }
     }
 }
 ```
 
-### Registro de Dependencias (Program.cs)
+#### Unit of Work — Transacciones
 
 ```csharp
-// Program.cs
+// ============================================
+// DAL/Repositorios/UnitOfWork.cs
+// ============================================
+using Microsoft.EntityFrameworkCore;
+using DAL.Interfaces;
+
+namespace DAL
+{
+    public class UnitOfWork : IUnitOfWork
+    {
+        private readonly AppDbContext _context;
+        private IProductoRepositorio? _productoRepo;
+        private IRepositorio<Venta>? _ventaRepo;
+        private IRepositorio<Categoria>? _categoriaRepo;
+        private IRepositorio<Empleado>? _empleadoRepo;
+
+        public UnitOfWork(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        // Lazy initialization — se crea solo cuando se necesita
+        public IProductoRepositorio Productos =>
+            _productoRepo ??= new ProductoRepositorio(_context);
+
+        public IRepositorio<Venta> Ventas =>
+            _ventaRepo ??= new Repositorio<Venta>(_context);
+
+        public IRepositorio<Categoria> Categorias =>
+            _categoriaRepo ??= new Repositorio<Categoria>(_context);
+
+        public IRepositorio<Empleado> Empleados =>
+            _empleadoRepo ??= new Repositorio<Empleado>(_context);
+
+        public async Task<int> GuardarCambiosAsync(CancellationToken ct = default)
+        {
+            return await _context.SaveChangesAsync(ct);
+        }
+
+        public async Task<bool> GuardarCambiosConValidacionAsync()
+        {
+            try
+            {
+                return await _context.SaveChangesAsync() > 0;
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                // Manejar conflicto de concurrencia
+                foreach (var entry in _context.ChangeTracker.Entries())
+                {
+                    entry.State = EntityState.Detached;
+                }
+                return false;
+            }
+        }
+
+        public void Dispose()
+        {
+            _context.Dispose();
+        }
+    }
+}
+```
+
+### 13.7 Capa 3 — Logica de Negocio (BLL)
+
+La Capa de Logica de Negocio (BLL) es el corazon de la aplicacion. Contiene las reglas de negocio, validaciones, calculos y orquestacion de operaciones. Los servicios de la BLL reciben solicitudes de la capa de presentacion, aplican las reglas usando LINQ, y coordinan las operaciones con la DAL. La BLL utiliza LINQ extensivamente para transformar entidades en DTOs, aplicar reglas de validacion, calcular metricas con funciones de agregado y generar reportes complejos.
+
+```csharp
+// ============================================
+// BLL/Excepciones/ReglaNegocioExcepcion.cs
+// ============================================
+namespace BLL.Excepciones
+{
+    public class ReglaNegocioExcepcion : Exception
+    {
+        public string Regla { get; }
+        public ReglaNegocioExcepcion(string regla, string mensaje)
+            : base(mensaje)
+        {
+            Regla = regla;
+        }
+    }
+
+    public class EntidadNoEncontradaExcepcion : Exception
+    {
+        public string Entidad { get; }
+        public int Id { get; }
+        public EntidadNoEncontradaExcepcion(string entidad, int id)
+            : base($"No se encontro {entidad} con Id={id}")
+        {
+            Entidad = entidad;
+            Id = id;
+        }
+    }
+}
+
+// ============================================
+// BLL/Validadores/ProductoValidador.cs
+// ============================================
+using Entidades;
+using Entidades.DTOs;
+
+namespace BLL.Validadores
+{
+    public static class ProductoValidador
+    {
+        // Validaciones usando LINQ Any, All, etc.
+        public static void ValidarCreacion(CrearProductoDTO dto)
+        {
+            var errores = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(dto.Nombre))
+                errores.Add("El nombre es obligatorio");
+
+            if (dto.Nombre?.Length > 200)
+                errores.Add("El nombre no puede exceder 200 caracteres");
+
+            if (dto.Precio <= 0)
+                errores.Add("El precio debe ser mayor a 0");
+
+            if (dto.Precio > 999999.99m)
+                errores.Add("El precio excede el limite permitido");
+
+            if (dto.Stock < 0)
+                errores.Add("El stock no puede ser negativo");
+
+            if (dto.CategoriaId <= 0)
+                errores.Add("Debe especificar una categoria valida");
+
+            // Si hay errores, lanzar excepcion con todos
+            if (errores.Any())
+                throw new ArgumentException(
+                    string.Join("; ", errores));
+        }
+
+        public static void ValidarActualizacion(ActualizarProductoDTO dto)
+        {
+            var errores = new List<string>();
+
+            if (dto.Id <= 0)
+                errores.Add("ID invalido");
+
+            if (string.IsNullOrWhiteSpace(dto.Nombre))
+                errores.Add("El nombre es obligatorio");
+
+            if (dto.Precio <= 0)
+                errores.Add("El precio debe ser mayor a 0");
+
+            if (errores.Any())
+                throw new ArgumentException(string.Join("; ", errores));
+        }
+    }
+}
+
+// ============================================
+// BLL/Interfaces/IProductoServicio.cs
+// ============================================
+using Entidades.DTOs;
+
+namespace BLL.Interfaces
+{
+    public interface IProductoServicio
+    {
+        // ── Consultas ──
+        Task<IEnumerable<ProductoDTO>> ObtenerTodosAsync();
+        Task<ProductoDTO?> ObtenerPorIdAsync(int id);
+        Task<IEnumerable<ProductoDTO>> BuscarAsync(string termino);
+        Task<IEnumerable<ProductoDTO>> ObtenerPorCategoriaAsync(int categoriaId);
+        Task<IEnumerable<ProductoDTO>> ObtenerStockBajoAsync();
+
+        // ── Reportes con LINQ y Agregados ──
+        Task<object> EstadisticasPorCategoriaAsync();
+        Task<ResumenProductosDTO> ObtenerResumenAsync();
+        Task<object> TopProductosVendidosAsync(int cantidad = 5);
+        Task<object> VentasPorMesAsync(int ano);
+        Task<object> VentasPorVendedorAsync(DateTime desde, DateTime hasta);
+        Task<IEnumerable<EmpleadoDTO>> RankingVendedoresAsync(int ano);
+
+        // ── CRUD ──
+        Task<int> CrearProductoAsync(CrearProductoDTO dto);
+        Task<bool> ActualizarProductoAsync(ActualizarProductoDTO dto);
+        Task<bool> EliminarProductoAsync(int id);
+
+        // ── Paginacion ──
+        Task<(IEnumerable<ProductoDTO> Items, int TotalRegistros)> ObtenerPaginadoAsync(
+            int pagina, int tamano, string? buscar = null, int? categoriaId = null);
+    }
+}
+
+// ============================================
+// BLL/Servicios/ProductoServicio.cs
+// ============================================
+using DAL.Interfaces;
+using Entidades;
+using Entidades.DTOs;
+using BLL.Interfaces;
+using BLL.Validadores;
+using BLL.Excepciones;
+using Microsoft.Extensions.Logging;
+
+namespace BLL
+{
+    public class ProductoServicio : IProductoServicio
+    {
+        private readonly IUnitOfWork _unitOfWork;
+        private readonly ILogger<ProductoServicio> _logger;
+
+        public ProductoServicio(
+            IUnitOfWork unitOfWork,
+            ILogger<ProductoServicio> logger)
+        {
+            _unitOfWork = unitOfWork;
+            _logger = logger;
+        }
+
+        // ── Obtener Todos: Entidad -> DTO con LINQ Select ──
+        public async Task<IEnumerable<ProductoDTO>> ObtenerTodosAsync()
+        {
+            var productos = await _unitOfWork.Productos.ObtenerConCategoriaAsync();
+
+            // LINQ en la BLL: transformar Entidad a DTO
+            return productos.Select(p => new ProductoDTO
+            {
+                Id = p.Id,
+                Nombre = p.Nombre,
+                Descripcion = p.Descripcion ?? "",
+                Precio = p.Precio,
+                Stock = p.Stock,
+                Categoria = p.Categoria?.Nombre ?? "Sin categoria",
+                CategoriaId = p.CategoriaId
+            })
+            .OrderBy(p => p.Nombre)
+            .ToList();
+        }
+
+        // ── Obtener Por ID ──
+        public async Task<ProductoDTO?> ObtenerPorIdAsync(int id)
+        {
+            var producto = await _unitOfWork.Productos.ObtenerPorIdAsync(id);
+            if (producto == null)
+                throw new EntidadNoEncontradaExcepcion("Producto", id);
+
+            return new ProductoDTO
+            {
+                Id = producto.Id,
+                Nombre = producto.Nombre,
+                Descripcion = producto.Descripcion ?? "",
+                Precio = producto.Precio,
+                Stock = producto.Stock,
+                Categoria = producto.Categoria?.Nombre ?? "",
+                CategoriaId = producto.CategoriaId
+            };
+        }
+
+        // ── Buscar: delega al repositorio ──
+        public async Task<IEnumerable<ProductoDTO>> BuscarAsync(string termino)
+        {
+            if (string.IsNullOrWhiteSpace(termino))
+                return await ObtenerTodosAsync();
+
+            var productos = await _unitOfWork.Productos.BuscarAsync(termino);
+
+            return productos.Select(p => new ProductoDTO
+            {
+                Id = p.Id,
+                Nombre = p.Nombre,
+                Precio = p.Precio,
+                Stock = p.Stock,
+                Categoria = p.Categoria?.Nombre ?? ""
+            });
+        }
+
+        // ── Estadisticas: GroupBy + Sum + Average + Max ──
+        public async Task<object> EstadisticasPorCategoriaAsync()
+        {
+            return await _unitOfWork.Productos.EstadisticasPorCategoriaAsync();
+        }
+
+        // ── Resumen: Agregados multiples en una sola query ──
+        public async Task<ResumenProductosDTO> ObtenerResumenAsync()
+        {
+            return await _unitOfWork.Productos.ObtenerResumenAsync();
+        }
+
+        // ── Top Productos: OrderByDescending + Take con GroupBy ──
+        public async Task<object> TopProductosVendidosAsync(int cantidad = 5)
+        {
+            var ventas = await _unitOfWork.Ventas.Obtener(
+                propiedadesIncluidas: "Producto");
+
+            return ventas
+                .GroupBy(v => v.Producto?.Nombre ?? "Desconocido")
+                .Select(g => new
+                {
+                    Producto = g.Key,
+                    CantidadVendida = g.Sum(v => v.Cantidad),
+                    Ingresos = g.Sum(v => v.Cantidad * v.PrecioUnitario)
+                })
+                .OrderByDescending(x => x.Ingresos)
+                .Take(cantidad);
+        }
+
+        // ── Ventas por Mes: GroupBy + Sum con filtro ──
+        public async Task<object> VentasPorMesAsync(int ano)
+        {
+            var ventas = await _unitOfWork.Ventas.Obtener(
+                propiedadesIncluidas: "Producto");
+
+            return ventas
+                .Where(v => v.FechaVenta.Year == ano)
+                .GroupBy(v => v.FechaVenta.Month)
+                .Select(g => new
+                {
+                    Mes = g.Key,
+                    TotalVentas = g.Sum(v => v.Cantidad * v.PrecioUnitario),
+                    CantidadTransacciones = g.Count(),
+                    TicketPromedio = g.Average(v => v.Cantidad * v.PrecioUnitario)
+                })
+                .OrderBy(x => x.Mes);
+        }
+
+        // ── Ventas por Vendedor: Join implicito + GroupBy ──
+        public async Task<object> VentasPorVendedorAsync(DateTime desde, DateTime hasta)
+        {
+            var ventas = await _unitOfWork.Ventas.Obtener(
+                filtro: v => v.FechaVenta >= desde && v.FechaVenta <= hasta,
+                propiedadesIncluidas: "Producto,Vendedor");
+
+            return ventas
+                .GroupBy(v => v.Vendedor != null
+                    ? $"{v.Vendedor.Nombre} {v.Vendedor.Apellido}"
+                    : "Desconocido")
+                .Select(g => new
+                {
+                    Vendedor = g.Key,
+                    Total = g.Sum(v => v.Cantidad * v.PrecioUnitario),
+                    Cantidad = g.Count()
+                })
+                .OrderByDescending(x => x.Total);
+        }
+
+        // ── Ranking Vendedores: Agregados + Select completo ──
+        public async Task<IEnumerable<EmpleadoDTO>> RankingVendedoresAsync(int ano)
+        {
+            var empleados = await _unitOfWork.Empleados.ObtenerTodos();
+            var ventas = await _unitOfWork.Ventas.Obtener(
+                filtro: v => v.FechaVenta.Year == ano,
+                propiedadesIncluidas: "Vendedor");
+
+            var ranking = empleados
+                .GroupJoin(ventas,
+                    e => e.Id,
+                    v => v.VendedorId,
+                    (e, vent) => new EmpleadoDTO
+                    {
+                        Id = e.Id,
+                        NombreCompleto = e.NombreCompleto,
+                        Departamento = e.Departamento,
+                        Salario = e.Salario,
+                        AntiguedadAnos = e.AntiguedadAnos,
+                        TotalVentas = vent.Count(),
+                        MontoTotalVentas = vent.Sum(v => v.Cantidad * v.PrecioUnitario)
+                    })
+                .OrderByDescending(e => e.MontoTotalVentas);
+
+            return ranking;
+        }
+
+        // ── Paginacion: Skip + Take con filtros dinamicos ──
+        public async Task<(IEnumerable<ProductoDTO> Items, int TotalRegistros)> ObtenerPaginadoAsync(
+            int pagina, int tamano, string? buscar = null, int? categoriaId = null)
+        {
+            var consulta = (await _unitOfWork.Productos.ObtenerConCategoriaAsync()).AsQueryable();
+
+            // Filtro dinamico con LINQ
+            if (!string.IsNullOrWhiteSpace(buscar))
+                consulta = consulta.Where(p =>
+                    p.Nombre.Contains(buscar) ||
+                    (p.Descripcion != null && p.Descripcion.Contains(buscar)));
+
+            if (categoriaId.HasValue)
+                consulta = consulta.Where(p => p.CategoriaId == categoriaId.Value);
+
+            var total = consulta.Count();
+
+            var items = consulta
+                .OrderBy(p => p.Nombre)
+                .Skip((pagina - 1) * tamano)
+                .Take(tamano)
+                .Select(p => new ProductoDTO
+                {
+                    Id = p.Id,
+                    Nombre = p.Nombre,
+                    Precio = p.Precio,
+                    Stock = p.Stock,
+                    Categoria = p.Categoria?.Nombre ?? ""
+                })
+                .ToList();
+
+            return (items, total);
+        }
+
+        // ── CRUD: Crear con validacion ──
+        public async Task<int> CrearProductoAsync(CrearProductoDTO dto)
+        {
+            // Validacion con metodo dedicado
+            ProductoValidador.ValidarCreacion(dto);
+
+            // Regla de negocio: no duplicar nombres
+            if (_unitOfWork.Productos.Existe(p => p.Nombre == dto.Nombre))
+                throw new ReglaNegocioExcepcion(
+                    "NombreDuplicado",
+                    $"Ya existe un producto con el nombre '{dto.Nombre}'");
+
+            var producto = new Producto
+            {
+                Nombre = dto.Nombre.Trim(),
+                Descripcion = dto.Descripcion?.Trim(),
+                Precio = dto.Precio,
+                Stock = dto.Stock,
+                CategoriaId = dto.CategoriaId,
+                Activo = true
+            };
+
+            _unitOfWork.Productos.Agregar(producto);
+            await _unitOfWork.GuardarCambiosAsync();
+
+            _logger.LogInformation("Producto creado: {Id} - {Nombre}", producto.Id, producto.Nombre);
+            return producto.Id;
+        }
+
+        // ── CRUD: Actualizar con validacion ──
+        public async Task<bool> ActualizarProductoAsync(ActualizarProductoDTO dto)
+        {
+            ProductoValidador.ValidarActualizacion(dto);
+
+            var producto = await _unitOfWork.Productos.ObtenerPorIdAsync(dto.Id);
+            if (producto == null)
+                throw new EntidadNoEncontradaExcepcion("Producto", dto.Id);
+
+            producto.Nombre = dto.Nombre.Trim();
+            producto.Descripcion = dto.Descripcion?.Trim();
+            producto.Precio = dto.Precio;
+            producto.Stock = dto.Stock;
+            producto.CategoriaId = dto.CategoriaId;
+            producto.Activo = dto.Activo;
+
+            _unitOfWork.Productos.Actualizar(producto);
+            var resultado = await _unitOfWork.GuardarCambiosConValidacionAsync();
+
+            _logger.LogInformation("Producto actualizado: {Id} - Exitoso: {Resultado}", dto.Id, resultado);
+            return resultado;
+        }
+
+        // ── CRUD: Eliminar (soft delete) ──
+        public async Task<bool> EliminarProductoAsync(int id)
+        {
+            var producto = await _unitOfWork.Productos.ObtenerPorIdAsync(id);
+            if (producto == null)
+                throw new EntidadNoEncontradaExcepcion("Producto", id);
+
+            // Regla de negocio: no eliminar productos con ventas
+            var tieneVentas = _unitOfWork.Ventas.Existe(v => v.ProductoId == id);
+            if (tieneVentas)
+            {
+                // Soft delete: marcar como inactivo en vez de eliminar
+                producto.Activo = false;
+                _unitOfWork.Productos.Actualizar(producto);
+                _logger.LogWarning("Producto desactivado (soft delete): {Id}", id);
+            }
+            else
+            {
+                // Hard delete solo si no tiene ventas asociadas
+                _unitOfWork.Productos.Eliminar(id);
+                _logger.LogInformation("Producto eliminado permanentemente: {Id}", id);
+            }
+
+            return await _unitOfWork.GuardarCambiosConValidacionAsync();
+        }
+    }
+}
+```
+
+#### Servicio de Reportes — LINQ Avanzado con Agregados
+
+```csharp
+// ============================================
+// BLL/Servicios/ReporteServicio.cs
+// ============================================
+using DAL.Interfaces;
+using Entidades.DTOs;
+
+namespace BLL
+{
+    public class ReporteServicio : IReporteServicio
+    {
+        private readonly IUnitOfWork _unitOfWork;
+
+        public ReporteServicio(IUnitOfWork unitOfWork)
+        {
+            _unitOfWork = unitOfWork;
+        }
+
+        // Reporte: Resumen general del inventario con TODOS los agregados
+        public async Task<ResumenProductosDTO> ResumenInventarioAsync()
+        {
+            return await _unitOfWork.Productos.ObtenerResumenAsync();
+        }
+
+        // Reporte: Ventas por categoria (Pivot con LINQ)
+        public async Task<object> VentasPorCategoriaPivotAsync(int ano)
+        {
+            var ventas = await _unitOfWork.Ventas.Obtener(
+                propiedadesIncluidas: "Producto.Categoria");
+
+            return ventas
+                .Where(v => v.FechaVenta.Year == ano)
+                .GroupBy(v => new
+                {
+                    Categoria = v.Producto?.Categoria?.Nombre ?? "Sin categoria",
+                    v.FechaVenta.Month
+                })
+                .Select(g => new
+                {
+                    g.Key.Categoria,
+                    Mes = g.Key.Month,
+                    Total = g.Sum(v => v.Cantidad * v.PrecioUnitario)
+                })
+                .ToList()
+                .GroupBy(x => x.Categoria)
+                .Select(g => new
+                {
+                    Categoria = g.Key,
+                    Ene = g.FirstOrDefault(x => x.Mes == 1)?.Total ?? 0,
+                    Feb = g.FirstOrDefault(x => x.Mes == 2)?.Total ?? 0,
+                    Mar = g.FirstOrDefault(x => x.Mes == 3)?.Total ?? 0,
+                    Abr = g.FirstOrDefault(x => x.Mes == 4)?.Total ?? 0,
+                    May = g.FirstOrDefault(x => x.Mes == 5)?.Total ?? 0,
+                    Jun = g.FirstOrDefault(x => x.Mes == 6)?.Total ?? 0,
+                    Jul = g.FirstOrDefault(x => x.Mes == 7)?.Total ?? 0,
+                    Ago = g.FirstOrDefault(x => x.Mes == 8)?.Total ?? 0,
+                    Sep = g.FirstOrDefault(x => x.Mes == 9)?.Total ?? 0,
+                    Oct = g.FirstOrDefault(x => x.Mes == 10)?.Total ?? 0,
+                    Nov = g.FirstOrDefault(x => x.Mes == 11)?.Total ?? 0,
+                    Dic = g.FirstOrDefault(x => x.Mes == 12)?.Total ?? 0,
+                    Total = g.Sum(x => x.Total)
+                })
+                .OrderByDescending(x => x.Total);
+        }
+
+        // Reporte: Tendencia de ventas mensual con LEFT JOIN (todos los meses)
+        public async Task<object> TendenciaVentasAsync(int ano)
+        {
+            var meses = Enumerable.Range(1, 12);
+            var ventas = await _unitOfWork.Ventas.Obtener(
+                filtro: v => v.FechaVenta.Year == ano);
+
+            var ventasPorMes = ventas
+                .GroupBy(v => v.FechaVenta.Month)
+                .Select(g => new { Mes = g.Key, Total = g.Sum(v => v.Cantidad * v.PrecioUnitario) })
+                .ToList();
+
+            // LEFT JOIN: todos los meses, incluso sin ventas
+            return from m in meses
+                   join v in ventasPorMes on m equals v.Mes into gv
+                   from v in gv.DefaultIfEmpty()
+                   select new
+                   {
+                       Mes = System.Globalization.CultureInfo.CurrentCulture.GetMonthName(m),
+                       MesNum = m,
+                       Total = v?.Total ?? 0
+                   };
+        }
+
+        // Reporte: Dashboard completo con multiples agregados
+        public async Task<ReporteVentasDTO> DashboardAsync(int ano)
+        {
+            var ventas = await _unitOfWork.Ventas.Obtener(
+                propiedadesIncluidas: "Producto.Categoria,Vendedor");
+
+            var ventasAno = ventas.Where(v => v.FechaVenta.Year == ano).ToList();
+
+            var reporte = new ReporteVentasDTO
+            {
+                Ano = ano,
+
+                // Resumen general con agregados
+                TotalVentas = ventasAno.Count,
+                IngresoTotal = ventasAno.Sum(v => v.Cantidad * v.PrecioUnitario),
+                TicketPromedio = ventasAno.Any()
+                    ? ventasAno.Average(v => v.Cantidad * v.PrecioUnitario)
+                    : 0,
+                VentaMaxima = ventasAno.Any()
+                    ? ventasAno.Max(v => v.Cantidad * v.PrecioUnitario)
+                    : 0,
+                VentaMinima = ventasAno.Any()
+                    ? ventasAno.Min(v => v.Cantidad * v.PrecioUnitario)
+                    : 0,
+
+                // Top 5 clientes por gasto
+                TopClientes = ventasAno
+                    .GroupBy(v => v.Vendedor != null
+                        ? $"{v.Vendedor.Nombre} {v.Vendedor.Apellido}"
+                        : "Desconocido")
+                    .Select(g => new TopClienteDTO
+                    {
+                        Cliente = g.Key,
+                        TotalGastado = g.Sum(v => v.Cantidad * v.PrecioUnitario),
+                        CantidadPedidos = g.Count()
+                    })
+                    .OrderByDescending(x => x.TotalGastado)
+                    .Take(5)
+                    .ToList(),
+
+                // Ingresos por mes
+                IngresosPorMes = ventasAno
+                    .GroupBy(v => v.FechaVenta.Month)
+                    .Select(g => new IngresoPorMesDTO
+                    {
+                        Mes = g.Key,
+                        NombreMes = System.Globalization.CultureInfo.CurrentCulture.GetMonthName(g.Key),
+                        Total = g.Sum(v => v.Cantidad * v.PrecioUnitario),
+                        CantidadVentas = g.Count()
+                    })
+                    .OrderBy(x => x.Mes)
+                    .ToList(),
+
+                // Top categorias
+                TopCategorias = ventasAno
+                    .GroupBy(v => v.Producto?.Categoria?.Nombre ?? "Sin categoria")
+                    .Select(g => new TopCategoriaDTO
+                    {
+                        Categoria = g.Key,
+                        CantidadVendida = g.Sum(v => v.Cantidad),
+                        Ingresos = g.Sum(v => v.Cantidad * v.PrecioUnitario)
+                    })
+                    .OrderByDescending(x => x.Ingresos)
+                    .Take(3)
+                    .ToList()
+            };
+
+            // Calcular variacion porcentual mes a mes
+            for (int i = 1; i < reporte.IngresosPorMes.Count; i++)
+            {
+                var anterior = reporte.IngresosPorMes[i - 1].Total;
+                var actual = reporte.IngresosPorMes[i].Total;
+                reporte.IngresosPorMes[i].VariacionPorcentual = anterior > 0
+                    ? Math.Round((actual - anterior) / anterior * 100, 2)
+                    : 0;
+            }
+
+            return reporte;
+        }
+    }
+}
+```
+
+### 13.8 Capa 4 — Presentacion (UI)
+
+La Capa de Presentacion es la interfaz con el usuario. Su unica responsabilidad es presentar datos y capturar entradas. **Nunca debe contener logica de negocio ni acceso directo a datos.** Usa LINQ exclusivamente para formatear datos, crear menus interactivos, y mostrar resultados de manera legible.
+
+#### Opcion A: Web API con Controllers
+
+```csharp
+// ============================================
+// Presentacion/Controllers/ProductosController.cs
+// ============================================
+using Microsoft.AspNetCore.Mvc;
+using BLL.Interfaces;
+using Entidades.DTOs;
+
+namespace Presentacion.Controllers
+{
+    [ApiController]
+    [Route("api/[controller]")]
+    public class ProductosController : ControllerBase
+    {
+        private readonly IProductoServicio _service;
+        private readonly ILogger<ProductosController> _logger;
+
+        public ProductosController(
+            IProductoServicio service,
+            ILogger<ProductosController> logger)
+        {
+            _service = service;
+            _logger = logger;
+        }
+
+        // GET: api/productos
+        [HttpGet]
+        public async Task<ActionResult<IEnumerable<ProductoDTO>>> GetTodos()
+        {
+            var productos = await _service.ObtenerTodosAsync();
+            return Ok(productos);
+        }
+
+        // GET: api/productos/5
+        [HttpGet("{id}")]
+        public async Task<ActionResult<ProductoDTO>> GetPorId(int id)
+        {
+            try
+            {
+                var producto = await _service.ObtenerPorIdAsync(id);
+                if (producto == null) return NotFound();
+                return Ok(producto);
+            }
+            catch (EntidadNoEncontradaExcepcion ex)
+            {
+                return NotFound(new { ex.Message });
+            }
+        }
+
+        // GET: api/productos/buscar?q=laptop
+        [HttpGet("buscar")]
+        public async Task<ActionResult> Buscar([FromQuery] string q)
+        {
+            if (string.IsNullOrWhiteSpace(q))
+                return BadRequest("El termino de busqueda no puede estar vacio.");
+            return Ok(await _service.BuscarAsync(q));
+        }
+
+        // GET: api/productos/resumen
+        [HttpGet("resumen")]
+        public async Task<ActionResult<ResumenProductosDTO>> GetResumen() =>
+            Ok(await _service.ObtenerResumenAsync());
+
+        // GET: api/productos/estadisticas
+        [HttpGet("estadisticas")]
+        public async Task<ActionResult> GetEstadisticas() =>
+            Ok(await _service.EstadisticasPorCategoriaAsync());
+
+        // GET: api/productos/top/5
+        [HttpGet("top/{cantidad}")]
+        public async Task<ActionResult> GetTop(int cantidad = 5) =>
+            Ok(await _service.TopProductosVendidosAsync(cantidad));
+
+        // GET: api/productos/paginado?pagina=2&tamano=10
+        [HttpGet("paginado")]
+        public async Task<ActionResult> GetPaginado(
+            [FromQuery] int pagina = 1,
+            [FromQuery] int tamano = 10,
+            [FromQuery] string? buscar = null,
+            [FromQuery] int? categoriaId = null)
+        {
+            var (items, total) = await _service.ObtenerPaginadoAsync(
+                pagina, tamano, buscar, categoriaId);
+            return Ok(new { items, total, pagina, tamano });
+        }
+
+        // POST: api/productos
+        [HttpPost]
+        public async Task<ActionResult<ProductoDTO>> Crear([FromBody] CrearProductoDTO dto)
+        {
+            try
+            {
+                var id = await _service.CrearProductoAsync(dto);
+                return CreatedAtAction(nameof(GetPorId), new { id }, new { Id = id });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { ex.Message });
+            }
+            catch (ReglaNegocioExcepcion ex)
+            {
+                return Conflict(new { ex.Regla, ex.Message });
+            }
+        }
+
+        // PUT: api/productos/5
+        [HttpPut("{id}")]
+        public async Task<ActionResult> Actualizar(int id, [FromBody] ActualizarProductoDTO dto)
+        {
+            if (id != dto.Id) return BadRequest("ID no coincide");
+            try
+            {
+                var resultado = await _service.ActualizarProductoAsync(dto);
+                return resultado ? NoContent() : StatusCode(500);
+            }
+            catch (EntidadNoEncontradaExcepcion ex)
+            {
+                return NotFound(new { ex.Message });
+            }
+        }
+
+        // DELETE: api/productos/5
+        [HttpDelete("{id}")]
+        public async Task<ActionResult> Eliminar(int id)
+        {
+            try
+            {
+                var resultado = await _service.EliminarProductoAsync(id);
+                return resultado ? NoContent() : StatusCode(500);
+            }
+            catch (EntidadNoEncontradaExcepcion ex)
+            {
+                return NotFound(new { ex.Message });
+            }
+        }
+    }
+}
+```
+
+#### Opcion B: Aplicacion de Consola
+
+```csharp
+// ============================================
+// Presentacion/Program.cs — Consola interactiva
+// ============================================
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using DAL;
+using DAL.Interfaces;
+using BLL;
+using BLL.Interfaces;
+using Entidades.DTOs;
+
+class Program
+{
+    static IProductoServicio? _productoServicio;
+    static IReporteServicio? _reporteServicio;
+    static IServiceProvider? _serviceProvider;
+
+    static void Main(string[] args)
+    {
+        // ── Configurar Inyeccion de Dependencias ──
+        var services = new ServiceCollection();
+
+        // DbContext
+        services.AddDbContext<AppDbContext>(options =>
+            options.UseSqlServer(
+                "Server=localhost;Database=Linq4CapasDB;" +
+                "Trusted_Connection=True;TrustServerCertificate=True;"));
+
+        // Unit of Work y Repositorios (DAL)
+        services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+        // Servicios (BLL)
+        services.AddScoped<IProductoServicio, ProductoServicio>();
+        services.AddScoped<IReporteServicio, ReporteServicio>();
+
+        _serviceProvider = services.BuildServiceProvider();
+        _productoServicio = _serviceProvider.GetRequiredService<IProductoServicio>();
+        _reporteServicio = _serviceProvider.GetRequiredService<IReporteServicio>();
+
+        // Crear BD si no existe
+        using (var scope = _serviceProvider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Database.Migrate();
+        }
+
+        // ── Menu Principal ──
+        bool salir = false;
+        while (!salir)
+        {
+            Console.Clear();
+            MostrarEncabezado("LINQ 4 Capas - Sistema de Gestion");
+            Console.WriteLine("  1.  Listar todos los productos");
+            Console.WriteLine("  2.  Buscar productos");
+            Console.WriteLine("  3.  Productos por categoria");
+            Console.WriteLine("  4.  Productos con stock bajo");
+            Console.WriteLine("  5.  Estadisticas por categoria (GroupBy + Agregados)");
+            Console.WriteLine("  6.  Resumen del inventario (Agregados multiples)");
+            Console.WriteLine("  7.  Top 5 productos vendidos");
+            Console.WriteLine("  8.  Ventas por mes");
+            Console.WriteLine("  9.  Ranking de vendedores");
+            Console.WriteLine("  10. Paginacion de productos");
+            Console.WriteLine("  11. Crear producto");
+            Console.WriteLine("  12. Actualizar producto");
+            Console.WriteLine("  13. Eliminar producto (soft delete)");
+            Console.WriteLine("  14. Dashboard completo de ventas");
+            Console.WriteLine("  0.  Salir");
+            Console.Write("\n  Seleccione una opcion: ");
+
+            switch (Console.ReadLine())
+            {
+                case "1":  ListarProductos(); break;
+                case "2":  BuscarProductos(); break;
+                case "3":  ProductosPorCategoria(); break;
+                case "4":  ProductosStockBajo(); break;
+                case "5":  EstadisticasCategoria(); break;
+                case "6":  ResumenInventario(); break;
+                case "7":  TopProductos(); break;
+                case "8":  VentasPorMes(); break;
+                case "9":  RankingVendedores(); break;
+                case "10": Paginacion(); break;
+                case "11": CrearProducto(); break;
+                case "12": ActualizarProducto(); break;
+                case "13": EliminarProducto(); break;
+                case "14": DashboardVentas(); break;
+                case "0":  salir = true; break;
+            }
+
+            if (!salir)
+            {
+                Console.WriteLine("\nPresione cualquier tecla para continuar...");
+                Console.ReadKey();
+            }
+        }
+    }
+
+    // ── Listar Todos: LINQ Select para formateo ──
+    static void ListarProductos()
+    {
+        var productos = _productoServicio!.ObtenerTodosAsync().Result;
+
+        MostrarEncabezado("Todos los Productos");
+
+        // LINQ en la presentacion: formatear salida
+        var filas = productos.Select((p, i) =>
+            $"  {i + 1,3}. {p.Nombre,-25} | {p.Categoria,-15} | ${p.Precio,8:F2} | Stock: {p.Stock,4} | {p.Estado}");
+
+        foreach (var fila in filas)
+            Console.WriteLine(fila);
+
+        // Totales con LINQ
+        Console.WriteLine($"\n  Total: {productos.Count()} productos");
+        Console.WriteLine($"  Valor inventario: ${productos.Sum(p => p.Precio * p.Stock):F2}");
+    }
+
+    // ── Resumen: Multiples Agregados ──
+    static void ResumenInventario()
+    {
+        var resumen = _productoServicio!.ObtenerResumenAsync().Result;
+
+        MostrarEncabezado("Resumen del Inventario");
+        Console.WriteLine($"  Total productos:     {resumen.TotalProductos}");
+        Console.WriteLine($"  Valor inventario:    ${resumen.ValorInventario:N2}");
+        Console.WriteLine($"  Precio promedio:     ${resumen.PrecioPromedio:N2}");
+        Console.WriteLine($"  Precio minimo:       ${resumen.PrecioMinimo:N2}");
+        Console.WriteLine($"  Precio maximo:       ${resumen.PrecioMaximo:N2}");
+        Console.WriteLine($"  Total unidades:      {resumen.TotalUnidades}");
+        Console.WriteLine($"  Productos activos:   {resumen.ProductosActivos}");
+        Console.WriteLine($"  Productos agotados:  {resumen.ProductosAgotados}");
+        Console.WriteLine($"  Bajo stock:          {resumen.ProductosBajoStock}");
+    }
+
+    // ── Ranking Vendedores: GroupJoin + Agregados ──
+    static void RankingVendedores()
+    {
+        Console.Write("  Ano: ");
+        int ano = int.Parse(Console.ReadLine() ?? "2024");
+
+        var ranking = _productoServicio!.RankingVendedoresAsync(ano).Result;
+
+        MostrarEncabezado($"Ranking de Vendedores - {ano}");
+        ranking.ToList().ForEach(v =>
+            Console.WriteLine($"  {v.NombreCompleto,-25} | {v.Departamento,-10} | " +
+                $"Ventas: {v.TotalVentas,4} | ${v.MontoTotalVentas,12:N2}"));
+    }
+
+    // ── Paginacion: Skip + Take ──
+    static void Paginacion()
+    {
+        int pagina = 1;
+        int tamano = 5;
+
+        while (true)
+        {
+            var (items, total) = _productoServicio!
+                .ObtenerPaginadoAsync(pagina, tamano).Result;
+
+            int totalPaginas = (int)Math.Ceiling((double)total / tamano);
+
+            MostrarEncabezado($"Productos - Pagina {pagina}/{totalPaginas} (Total: {total})");
+
+            items.ToList().ForEach(p =>
+                Console.WriteLine($"  {p.Nombre,-25} | {p.Categoria,-15} | ${p.Precio,8:F2} | {p.Estado}"));
+
+            Console.WriteLine($"\n  [A]nterior | [S]iguiente | [V]olver");
+            var key = Console.ReadKey(true).Key;
+
+            if (key == ConsoleKey.A && pagina > 1) pagina--;
+            else if (key == ConsoleKey.S && pagina < totalPaginas) pagina++;
+            else if (key == ConsoleKey.V) break;
+        }
+    }
+
+    static void MostrarEncabezado(string titulo)
+    {
+        Console.WriteLine($"\n  +============================================+");
+        Console.WriteLine($"  |  {titulo,-40}  |");
+        Console.WriteLine($"  +============================================+\n");
+    }
+}
+```
+
+### Registro de Dependencias Completo (Program.cs para Web API)
+
+```csharp
+// ============================================
+// Presentacion/Program.cs — Web API
+// ============================================
+using Microsoft.EntityFrameworkCore;
+using DAL;
+using DAL.Interfaces;
+using BLL;
+using BLL.Interfaces;
+
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddDbContext<TiendaContext>(opt =>
-    opt.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+// ── 1. DbContext con SQL Server ──
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlServer(
+        builder.Configuration.GetConnectionString("Default")));
 
-builder.Services.AddScoped<IProductoRepository, ProductoRepository>();
-builder.Services.AddScoped<IProductoService,    ProductoService>();
+// ── 2. Unit of Work (DAL) ──
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
+// ── 3. Servicios (BLL) ──
+builder.Services.AddScoped<IProductoServicio, ProductoServicio>();
+builder.Services.AddScoped<IReporteServicio, ReporteServicio>();
+
+// ── 4. Controllers y Swagger ──
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// ── 5. CORS (si es necesario) ──
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+        policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+});
+
 var app = builder.Build();
-app.UseSwagger();
-app.UseSwaggerUI();
+
+// ── 6. Crear BD y aplicar migraciones automaticamente ──
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.Migrate();
+}
+
+// ── 7. Middleware ──
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseCors();
 app.MapControllers();
 app.Run();
 ```
 
-### Resumen de LINQ por Capa
+### 13.9 Diagrama de Dependencias entre Proyectos
 
-| Capa | Operadores LINQ mas usados | Proposito |
-|------|---------------------------|-----------|
-| **Presentacion** | `Select`, `OrderBy`, `Take`, `Skip`, `Count`, `Sum` | Formateo, paginacion, resumenes visuales |
-| **BLL (Servicio)** | `Where`, `GroupBy`, `Aggregate`, `Any`, `All`, `Select` | Validaciones, reglas de negocio, calculos |
-| **DAL (Repositorio)** | `Where`, `Include`, `AsNoTracking`, `FirstOrDefault`, `OrderBy` | Consultas SQL, filtrado, carga de relaciones |
-| **Datos (Modelos)** | Data Annotations, `Expression<T>` | Mapeo, validacion de modelos |
+```
+                    Presentacion.csproj
+                    (ASP.NET Core / Consola)
+                    |           |
+                    v           v
+                  BLL.csproj    |
+                  (Services)    |
+                    |           |
+                    v           v
+                  DAL.csproj    |
+                  (Repositories)|
+                    |           |
+                    v           v
+                Entidades.csproj
+                (Models / DTOs)
+                        |
+                        v
+                   SQL Server
+```
+
+**Referencias entre proyectos (.csproj):**
+```xml
+<!-- Presentacion.csproj -->
+<ProjectReference Include="..\BLL\BLL.csproj" />
+<ProjectReference Include="..\DAL\DAL.csproj" />     <!-- Para DI -->
+<ProjectReference Include="..\Entidades\Entidades.csproj" />
+
+<!-- BLL.csproj -->
+<ProjectReference Include="..\DAL\DAL.csproj" />
+<ProjectReference Include="..\Entidades\Entidades.csproj" />
+
+<!-- DAL.csproj -->
+<ProjectReference Include="..\Entidades\Entidades.csproj" />
+
+<!-- Entidades.csproj -->
+<!-- NO tiene referencias a otros proyectos de la solucion -->
+```
+
+### 13.10 Tabla Completa de LINQ por Capa
+
+| Capa | Operadores LINQ mas usados | Proposito | Ejemplo tipico |
+|------|---------------------------|-----------|---------------|
+| **Presentacion** | `Select`, `OrderBy`, `Take`, `Skip`, `Count`, `Sum`, `FirstOrDefault` | Formatear datos para mostrar, paginar, resumir visualmente | `productos.Select(p => $"#{i} {p.Nombre}")` |
+| **BLL (Servicio)** | `Where`, `GroupBy`, `Aggregate`, `Any`, `All`, `Select`, `GroupJoin` | Validar reglas de negocio, calcular metricas, transformar Entidad a DTO | `ventas.GroupBy(v => v.Mes).Select(g => g.Sum())` |
+| **DAL (Repositorio)** | `Where`, `Include`, `ThenInclude`, `AsNoTracking`, `FirstOrDefault`, `OrderBy`, `GroupBy` | Construir consultas SQL, cargar relaciones, filtrar en BD | `_dbSet.Include(p => p.Categoria).Where(p => p.Activo)` |
+| **Entidades** | Data Annotations, `Expression<T>`, `NotMapped`, `ForeignKey` | Mapear clases a tablas, definir validaciones y relaciones | `[Table("Productos")]`, `[ForeignKey(nameof(Categoria))]` |
+
+### 13.11 Cadena de Conexion (appsettings.json)
+
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=localhost;Database=Linq4CapasDB;Trusted_Connection=True;TrustServerCertificate=True;"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.EntityFrameworkCore": "Warning"
+    }
+  }
+}
+```
+
+> **Nota:** Para SQL Server Express use `Server=localhost\\SQLEXPRESS`. Para LocalDB use `Server=(localdb)\\mssqllocaldb`. Nunca almacene credenciales en el codigo fuente; use Azure Key Vault o variables de entorno para produccion.
 
 ---
 
